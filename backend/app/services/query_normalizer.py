@@ -6,11 +6,13 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 
 query_cache = {}
 
-QUERY_PROMPT =  """Rewrite the user's question in Hindi Devanagari, exactly as YouTube auto-captions
-would write a Hindi speaker saying it. English technical words are spelled phonetically in
-Devanagari, for example: two pointer -> टू पॉइंटर, hash map -> हैश मैप,
-time complexity -> टाइम कॉम्प्लेक्सिटी, sliding window -> स्लाइडिंग विंडो,
-sorted array -> सॉर्टेड एरे. Keep the meaning identical. Return ONLY the rewritten question."""
+QUERY_PROMPT = """You are a search query optimizer for a DSA YouTube tutorial database with Hindi transcripts.
+Extract and output ONLY the concise search keywords for semantic search:
+1. Strip all conversational filler words (e.g., 'ko kaise solve karte hai', 'kya hota hai', 'batao', 'kaise karein', 'how to solve', 'explain').
+2. Identify the core DSA problem, algorithm, or underlying pattern (e.g., Sliding Window, Two Pointers, Prefix Sum, Kadane, Binary Search, Stack, Linked List).
+3. Transcribe technical concepts into Hindi Devanagari phonetics as spoken by instructors (e.g., sliding window -> स्लाइडिंग विंडो, two pointer -> टू पॉइंटर, longest substring -> लॉन्गेस्ट सबस्ट्रिंग, target sum / pair sum -> टार्गेट सम पेयर सम, duplicate / distinct -> डुप्लीकेट डिस्टिंक्ट, prefix sum -> प्रीफिक्स सम).
+4. Include both the Devanagari phonetic keywords and the core pattern name.
+5. Return ONLY the search keywords, nothing else."""
 
 
 def normalize_query(query: str):

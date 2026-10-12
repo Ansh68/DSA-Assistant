@@ -87,10 +87,26 @@ def stream_query(query: str):
     query_embedding = create_embedding(normalized_query)
 
     # 3. Retrieve candidates from Qdrant
-    results = retrieve_chunks(query_embedding, limit=15)
+    results = retrieve_chunks(query_embedding, limit=40)
 
-    # 4. Rerank candidates
-    reranked_results = rerank(normalized_query, results, top_k=5)
+    
+    for i, pt in enumerate(results, 1):
+        payload = pt.payload or {}
+        v_title = payload.get("video_title", "Unknown")
+        st = payload.get("start_time", 0)
+        score = getattr(pt, "score", 0.0) or 0.0
+        text_snippet = payload.get("text", "").replace("\n", " ")[:60]
+        print(f"  {i:2d}. [Score: {score:.3f}] {v_title} @ {int(st)}s -> \"{text_snippet}...\"")
+
+    # 4. Rerank candidates using combined query (English + Hindi concepts)
+    rerank_query = f"{query} | {normalized_query}"
+    reranked_results = rerank(rerank_query, results, top_k=5)
+
+    for i, (pt, r_score) in enumerate(reranked_results, 1):
+        payload = pt.payload or {}
+        v_title = payload.get("video_title", "Unknown")
+        st = payload.get("start_time", 0)
+        print(f"  {i:2d}. [Cohere: {r_score:.4f}] {v_title} @ {int(st)}s")
 
     # 5. Build context for LLM
     context = build_context(reranked_results)
@@ -121,6 +137,11 @@ def stream_query(query: str):
 
     timestamp_results = build_timestamp_results(selected_results)
 
+
+    for i, res in enumerate(timestamp_results, 1):
+        print(f"  {i:2d}. {res['video_title']} [{res['start_timestamp']} - {res['end_timestamp']}]")
+    print("=" * 60 + "\n")
+
     # 9. Send results event after the answer is fully streamed
     yield sse_event("results", {"results": timestamp_results})
 
@@ -138,4 +159,4 @@ def query(request: QueryRequest):
             "X-Accel-Buffering": "no",
             "Cache-Control": "no-cache",
         },
-    )
+    )

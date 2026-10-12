@@ -1,33 +1,37 @@
-from FlagEmbedding import FlagReranker
+import cohere
+import logging
+from app.core.config import COHERE_API_KEY
 
-MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+logger = logging.getLogger(__name__)
 
-reranker = FlagReranker(
-    MODEL_NAME,
-    use_fp16=False,
-)
+MODEL_NAME = "rerank-multilingual-v3.0"
 
-def rerank(query ,results , top_k = 5):
-    pairs = []
-
-    for result in results:
-        text= result.payload.get("text", "")
-
-        pairs.append([query, text])
-
-    scores = reranker.compute_score(
-        pairs,
-        normalize=True
-    )
-
-    if not isinstance(scores, list):
-        scores = [scores]
-
-    reranked = sorted(
-        zip(results, scores),
-        key=lambda x: x[1],
-        reverse=True,
-    )
+client = cohere.Client(api_key=COHERE_API_KEY)
 
 
-    return reranked[:top_k]
+def rerank(query: str, results: list, top_k: int = 5):
+    if not results:
+        return []
+
+    documents = [
+        f"Video: {result.payload.get('video_title', '')}\nTranscript: {result.payload.get('text', '')}"
+        for result in results
+    ]
+
+    try:
+        response = client.rerank(
+            model=MODEL_NAME,
+            query=query,
+            documents=documents,
+            top_n=min(top_k, len(documents)),
+        )
+
+        reranked = [
+            (results[item.index], item.relevance_score)
+            for item in response.results
+        ]
+        return reranked
+
+    except Exception as e:
+        logger.error(f"Cohere rerank failed: {e}. Falling back to original order.")
+        return [(result, 1.0) for result in results[:top_k]]
