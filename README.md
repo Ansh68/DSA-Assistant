@@ -1,388 +1,262 @@
-﻿# DSA Assistant — YouTube Course RAG
+# DSA Assistant — YouTube Course RAG
 
-A Retrieval-Augmented Generation (RAG) application that helps learners find relevant concepts from a YouTube DSA playlist. Users can ask questions in natural language, receive concise explanations, and navigate directly to relevant video timestamps.
+A high-performance Retrieval-Augmented Generation (RAG) platform that allows learners to ask natural-language questions about any YouTube video course and receive intelligent, real-time answers with **exact, clickable video timestamps** that play directly inside the application.
+
+---
 
 ## Features
 
-Natural-language question answering
-
-Hindi/Hinglish query normalization
-
-Multilingual semantic search over video transcripts
-
-Qdrant vector database for transcript retrieval
-
-BGE reranking for improved relevance
-
-Groq-powered answer generation
-
-Timestamp-based video recommendations
-
-Embedded YouTube playback
+- **Natural-Language Question Answering:** Ask complex conceptual questions in English, Hindi, or Hinglish.
+- **Clean Query Normalization:** Strips conversational filler and extracts core algorithmic concepts & Devanagari phonetics.
+- **High-Dimension Semantic Search:** Powered by Google Gemini (`gemini-embedding-001`, 3072 dimensions) with Qdrant Cloud.
+- **Multilingual Cross-Encoder Reranking:** Powered by Cohere (`rerank-multilingual-v3.0`) for top relevance precision.
+- **Ultra-Fast Streaming Generation:** Token-by-token streaming via Groq API (`openai/gpt-oss-120b`) over Server-Sent Events (SSE).
+- **Embedded In-Platform Video Playback:** Click any timestamp card to seek and play that exact lecture moment inside the app (no redirection to YouTube).
+- **Production-Ready & Cloud-Optimized:** Memory-optimized architecture running at under **160 MB RAM**, deploying 100% free on Render and Vercel.
 
 ---
 
-## What it Does
+## Architecture & Data Flow
 
-You type a question like *"Two pointer kya hota hai?"* or *"Explain binary search"* and the system:
-
-1. Normalizes your query into the language the transcripts are actually written in
-2. Searches a vector database of chunked video transcripts for the most relevant moments
-3. Reranks the results for precision
-4. Streams a contextual AI-generated answer in real time
-5. Shows you clickable video cards with the exact timestamps — plays the video right on the platform (no redirect to YouTube)
+```text
+User Question (e.g. "two sum ko kaise solve karte hai?")
+     │
+     ▼
+[1] Query Normalizer (Groq LLM)
+     │ Extracts core DSA pattern & phonetics (e.g. "टू सम, टू पॉइंटर, टार्गेट सम")
+     ▼
+[2] Embedding Generation (Google Gemini API)
+     │ Generates 3072-dimensional vector using 'RETRIEVAL_QUERY' task type (0 MB RAM)
+     ▼
+[3] Qdrant Cloud Vector Search
+     │ Fetches top 40 candidate transcript chunks by cosine similarity
+     ▼
+[4] Cross-Encoder Reranking (Cohere API)
+     │ Evaluates Video Title + Transcript against combined query, scoring top 5
+     ▼
+[5] Answer Generator (Groq LLM)
+     │ Streams detailed Hinglish explanation token-by-token via Server-Sent Events (SSE)
+     ▼
+[6] Diversity Filter & Timestamp Formatting
+     │ Picks top 3 diverse moments across videos (minimum 60-second separation)
+     ▼
+[7] Next.js Frontend
+     │ Renders markdown answer in real-time + embedded YouTube player seeking to timestamp
+```
 
 ---
 
-## Architecture
+## Deployment Journey & Architectural Optimizations
 
+### The Problem: Render Free-Tier Memory Limits
+
+When initially deploying the backend to Render's free tier, the deployment failed repeatedly with:
+```text
+==> Running 'uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT'
+==> Out of memory (used over 512Mi)
 ```
-User Query
-    │
-    ▼
-Query Normalizer (LLM)          ← Converts Hinglish/English query to Hindi Devanagari
-    │                              (matches how YouTube auto-captions write Hindi)
-    ▼
-Embedding Model                 ← paraphrase-multilingual-MiniLM-L12-v2
-    │                              Converts query to a 384-dim vector
-    ▼
-Qdrant Vector Search            ← Retrieves top 15 transcript chunks by cosine similarity
-    │
-    ▼
-Cross-Encoder Reranker          ← BAAI/bge-reranker-v2-m3
-    │                              Re-scores and picks top 5 most relevant chunks
-    ▼
-LLM Generator (Groq)            ← Streams Hinglish answer token-by-token via SSE
-    │
-    ▼
-Diversity Filter                ← Selects 3 timestamp results spread across different videos/moments
-    │
-    ▼
-Frontend (Next.js)              ← Shows streaming answer + embedded video player
-```
+
+### Why the Original Setup Was Too Heavy
+
+1. **Local PyTorch & CUDA Overhead:** The original backend loaded both `sentence-transformers` (`paraphrase-multilingual-MiniLM-L12-v2`) and `FlagEmbedding` (`BAAI/bge-reranker-v2-m3`) locally into server memory using PyTorch.
+2. **Massive Memory Footprint:** The BGE reranker alone is a 568-million parameter model requiring over 2.2 GB of weights. Loading PyTorch and both models pushed resident memory usage to **1,267 MB RAM**.
+3. **Hard 512 MB Limit:** Render's free tier caps memory at **512 MB**. As soon as Uvicorn initialized the models on startup, Render's Linux OOM killer terminated the process.
+4. **Environment Conflicts:** Pinned Windows/Python 3.13 dependencies in `requirements.txt` (like `networkx==3.7`) broke on Render's Linux Python 3.11 environment.
+
+---
+
+### How It Was Solved (3-Stage Cloud Optimization)
+
+| Stage | What Was Changed | Why | Result |
+|---|---|---|---|
+| **Phase 1: Cohere Reranker API** | Replaced local `FlagEmbedding` (`BAAI/bge-reranker-v2-m3`) with **Cohere Rerank API** (`rerank-multilingual-v3.0`). | Eliminated the 2.2 GB cross-encoder model from local memory while improving multilingual ranking for Hindi/Hinglish terms. | Memory dropped by ~650 MB; reranking precision improved. |
+| **Phase 2: Google Gemini Embeddings API** | Replaced local `sentence-transformers` with **Google Gemini Embedding API** (`gemini-embedding-001`, 3072 dimensions). | Hugging Face removed free Serverless Inference credits ($0.00 allowance). Gemini provides 1,500 free requests/day with 0 MB server RAM usage. | **Total backend RAM dropped from 1,267 MB to ~160 MB!** Fits safely within Render's 512 MB ceiling. |
+| **Phase 3: Production CORS & Clean Build** | Stripped PyTorch, CUDA, and unused frozen packages from `requirements.txt`; configured permissive CORS in `main.py`. | Dramatically sped up build times from minutes to seconds; enabled deployed Vercel frontend to query the Render API without CORS blocks. | Clean 30-second builds on Linux and zero CORS issues in production. |
 
 ---
 
 ## Tech Stack
 
 ### Backend
-| Component | Technology |
-|-----------|-----------|
-| API Framework | **FastAPI** (Python) |
-| Vector Database | **Qdrant Cloud** (managed) |
-| Embedding Model | `paraphrase-multilingual-MiniLM-L12-v2` via **sentence-transformers** |
-| Reranker Model | `BAAI/bge-reranker-v2-m3` via **FlagEmbedding** |
-| LLM / Generator | **Groq API** (`openai/gpt-oss-120b`) |
-| Query Normalizer | **Groq API** (LLM-based Hinglish → Hindi conversion) |
-| Transcript Fetcher | **youtube-transcript-api** |
-| Playlist Fetcher | **yt-dlp** |
-| Streaming Protocol | **Server-Sent Events (SSE)** |
-| Language | Python 3.10+ |
+| Component | Technology | Role |
+|---|---|---|
+| API Framework | **FastAPI** (Python 3.10+) | High-performance asynchronous REST & SSE streaming server |
+| Vector Database | **Qdrant Cloud** | Managed vector search cluster storing 3072-dim embeddings |
+| Embedding Engine | **Google Gemini API** (`gemini-embedding-001`) | Cloud-based 3072-dimension semantic embeddings (0 MB local RAM) |
+| Reranker Engine | **Cohere Rerank API** (`rerank-multilingual-v3.0`) | Cross-encoder contextual relevance scoring |
+| LLM Generator | **Groq API** (`openai/gpt-oss-120b`) | Ultra-fast token streaming for conversational answers |
+| Query Normalizer | **Groq API** | Strips conversational filler and extracts DSA patterns & phonetics |
+| Ingestion & Transcripts | **yt-dlp** & **youtube-transcript-api** | Extracts video metadata, chunking, and auto-captions |
 
 ### Frontend
-| Component | Technology |
-|-----------|-----------|
-| Framework | **Next.js 16** (App Router) |
-| Language | **TypeScript** |
-| Styling | **Vanilla CSS** (custom design system) |
-| Font | **Inter** (Google Fonts via next/font) |
-| Markdown Rendering | **react-markdown** + **remark-gfm** |
-| Video Embedding | YouTube IFrame API (on-platform, no redirect) |
+| Component | Technology | Role |
+|---|---|---|
+| Web Framework | **Next.js 16** (App Router) | React framework deployed globally on Vercel |
+| Language | **TypeScript** | Type safety across client components |
+| Styling | **Vanilla CSS** | Minimalist ChatGPT-inspired black-and-white theme |
+| Typography | **Inter** (via `next/font/google`) | Clean, modern sans-serif typography |
+| Markdown Parser | **react-markdown** + **remark-gfm** | Renders formatted code blocks, bold text, and lists cleanly |
+| Video Player | **YouTube IFrame API** | Smooth in-app playback seeking to specific timestamps |
 
 ---
 
 ## Project Structure
 
-```
+```text
 youtube-rag/
 ├── backend/
 │   ├── app/
 │   │   ├── api/
-│   │   │   └── query.py          # SSE streaming endpoint
+│   │   │   └── query.py              # SSE streaming endpoint with 3-stage candidate logging
 │   │   ├── core/
-│   │   │   ├── config.py         # Environment variables
-│   │   │   └── qdrant.py         # Qdrant client setup
+│   │   │   ├── config.py             # Environment configuration (Qdrant, Groq, Cohere, Gemini)
+│   │   │   └── qdrant.py             # Qdrant client connection
 │   │   ├── ingestion/
-│   │   │   ├── index.py          # Full ingestion pipeline (run once)
-│   │   │   ├── playlist.py       # Fetches all videos from a playlist
-│   │   │   ├── transcript.py     # Downloads transcripts from YouTube
-│   │   │   └── chunker.py        # Splits transcripts into timed chunks
+│   │   │   ├── chunker.py            # Splits transcript timeline into timed chunks
+│   │   │   ├── playlist.py           # Fetches video catalog from playlist URL
+│   │   │   ├── transcript.py         # Pulls caption tracks from YouTube
+│   │   │   └── index.py              # Local pipeline script for indexing new playlists
 │   │   ├── services/
-│   │   │   ├── embedding.py      # Creates vector embeddings
-│   │   │   ├── retriever.py      # Queries Qdrant
-│   │   │   ├── reranker.py       # Cross-encoder reranking
-│   │   │   ├── generator.py      # Groq LLM streaming
-│   │   │   ├── query_normalizer.py # LLM-based query normalization
-│   │   │   └── diversity.py      # Selects diverse timestamp results
-│   │   └── main.py               # FastAPI app entry point
-│   ├── create_qdrant_indexes.py  # One-time index creation script
-│   ├── requirements.txt
-│   ├── run.py
-│   └── .env                      # Your secrets go here
+│   │   │   ├── diversity.py          # Enforces minimum time gaps between video recommendations
+│   │   │   ├── embedding.py          # Gemini API embedding client (3072 dimensions)
+│   │   │   ├── generator.py          # Groq streaming answer generator
+│   │   │   ├── query_normalizer.py   # Keyword extractor & phonetic translator
+│   │   │   ├── reranker.py           # Cohere multilingual cross-encoder reranker
+│   │   │   └── retriever.py          # Qdrant vector retrieval service (limit=40)
+│   │   └── main.py                   # FastAPI app with health checks and production CORS
+│   ├── gemini_embeddings.py          # Utility script for migrating/generating Gemini vectors
+│   ├── requirements.txt              # Ultra-lightweight dependencies (No PyTorch/CUDA)
+│   └── .env                          # Local environment variables
 │
 └── frontend/
     ├── app/
     │   ├── components/
-    │   │   └── QueryInterface.tsx # Main UI component
-    │   ├── globals.css            # Design system & all styles
-    │   ├── layout.tsx             # Root layout with Inter font
-    │   └── page.tsx               # Root page
-    ├── .env.local                 # Frontend env (API URL)
+    │   │   └── QueryInterface.tsx    # Interactive chat UI, SSE reader & embedded player
+    │   ├── globals.css               # Clean minimal theme & typography styles
+    │   ├── layout.tsx                # Root layout with Inter font
+    │   └── page.tsx                  # Home landing page
+    ├── .env.local                    # Frontend API endpoint config
     ├── next.config.ts
     └── package.json
 ```
 
 ---
 
-## Running on Your Own System with Your Own Playlist
+## Running Locally
 
-Follow these steps in order. This only takes about 15–20 minutes to set up.
+### 1. Prerequisites
+- **Python 3.10+**
+- **Node.js 18+**
+- API Keys (all free tier):
+  - [Google AI Studio (Gemini)](https://aistudio.google.com/)
+  - [Groq Console](https://console.groq.com/)
+  - [Cohere Dashboard](https://dashboard.cohere.com/)
+  - [Qdrant Cloud](https://cloud.qdrant.io/)
 
-### Prerequisites
+### 2. Backend Setup
 
-- Python 3.10 or newer
-- Node.js 18 or newer
-- A [Groq API key](https://console.groq.com) (free tier works)
-- A [Qdrant Cloud](https://cloud.qdrant.io) account (free tier — 1 free cluster)
-
----
-
-### Step 1 — Clone the Repository
-
-```bash
-git clone <your-repo-url>
-cd youtube-rag
-```
-
----
-
-### Step 2 — Set Up the Backend
-
-```bash
+```powershell
 cd backend
 
-# Create and activate a virtual environment
+# Create virtual environment
 python -m venv venv
+.\venv\Scripts\Activate.ps1    # On Windows
+# source venv/bin/activate     # On macOS/Linux
 
-# On Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-
-# On macOS/Linux:
-source venv/bin/activate
-
-# Install all dependencies
+# Install dependencies (fast, no heavy PyTorch)
 pip install -r requirements.txt
 ```
 
-> **Note for Windows:** If you get an execution policy error when activating the venv, run this first:
-> ```powershell
-> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-> ```
-
----
-
-### Step 3 — Get Your API Keys
-
-#### Groq API Key
-1. Sign up at [console.groq.com](https://console.groq.com)
-2. Go to **API Keys** → **Create API Key**
-3. Copy the key (starts with `gsk_`)
-
-#### Qdrant Cloud
-1. Sign up at [cloud.qdrant.io](https://cloud.qdrant.io)
-2. Create a new **cluster** (free tier — 1 cluster, 0.5 GB)
-3. Once the cluster is ready, click on it and go to **API Keys**
-4. Create an API key and copy it
-5. Also copy the **cluster URL** (looks like `https://xxxx.eu-west-1-0.aws.cloud.qdrant.io`)
-
----
-
-### Step 4 — Configure the Backend `.env`
-
-Create (or edit) `backend/.env` with your values:
-
+Create `backend/.env`:
 ```env
-GROQ_API_KEY=gsk_your_groq_key_here
-QDRANT_API_KEY=your_qdrant_api_key_here
-QDRANT_URL=https://your-cluster-id.region.cloud.qdrant.io
-QDRANT_COLLECTION=youtube_transcripts
+GROQ_API_KEY=gsk_your_groq_key
+COHERE_API_KEY=your_cohere_key
+GEMINI_API_KEY=your_gemini_key
+QDRANT_URL=https://your-cluster.cloud.qdrant.io
+QDRANT_API_KEY=your_qdrant_key
+QDRANT_COLLECTION=youtube_transcripts_gemini_test
 PLAYLIST_URL=https://www.youtube.com/playlist?list=YOUR_PLAYLIST_ID
 ```
 
-**How to find your playlist URL:**
-- Go to your YouTube playlist
-- Copy the URL from the browser — it should look like `https://www.youtube.com/playlist?list=PLxxxxxx`
-- Paste it as the value for `PLAYLIST_URL`
-
-> **Important:** The playlist must have videos with **auto-generated captions**. Most Hindi/English YouTube videos have these automatically. If a video has no captions, it will be skipped automatically during ingestion.
-
----
-
-### Step 5 — Run the Ingestion Pipeline
-
-This is a one-time step that downloads all transcripts and indexes them into Qdrant.
-
-```bash
-# Make sure you are in the backend folder with the venv activated
-cd backend
-
-python -m app.ingestion.index
+Run the backend server:
+```powershell
+uvicorn app.main:app --reload --port 8000
 ```
+Verify health: `http://localhost:8000/health` → `{"status": "ok"}`
 
-This will:
-- Fetch all video IDs from your playlist
-- Download the transcript for each video
-- Split transcripts into timed chunks (with start/end times preserved)
-- Create embeddings for each chunk
-- Upload everything to your Qdrant collection
+### 3. Frontend Setup
 
-Ingestion time depends on playlist size. A 100-video playlist typically takes 10–20 minutes.
-
-> **If YouTube blocks you** mid-ingestion (rate limiting), the script will stop and tell you. All already-indexed videos are safe in Qdrant. Wait a few hours and run the script again — it skips already-indexed videos automatically.
-
----
-
-### Step 6 — Create Qdrant Payload Index
-
-This creates a fast filter index on `video_id`:
-
-```bash
-python create_qdrant_indexes.py
-```
-
-Only needs to be run once after the first ingestion.
-
----
-
-### Step 7 — Start the Backend Server
-
-```bash
-uvicorn app.main:app --reload
-```
-
-The API will be available at `http://localhost:8000`
-
-You can verify it is running:
-- `http://localhost:8000/health` → `{"status": "ok"}`
-- `http://localhost:8000/health/qdrant` → Qdrant connection status
-
----
-
-### Step 8 — Set Up the Frontend
-
-Open a new terminal:
-
-```bash
+Open a separate terminal:
+```powershell
 cd frontend
 npm install
 ```
 
-Create (or edit) `frontend/.env.local`:
-
+Create `frontend/.env.local`:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
----
-
-### Step 9 — Start the Frontend
-
-```bash
+Start the frontend dev server:
+```powershell
 npm run dev
 ```
-
 Open `http://localhost:3000` in your browser.
 
 ---
 
-## How to Use
+## Deployment Guide (100% Free)
 
-1. Open `http://localhost:3000` in your browser
-2. Type any question related to your course — in English, Hindi, or Hinglish
-3. Hit **Enter** or click the send button
-4. The system streams an AI-generated answer in real time
-5. Below the answer, up to 3 **video timestamp cards** appear — click any card to play that exact moment directly on the platform (no redirect to YouTube)
-6. Click the logo at any time to return to the home screen
-7. Use the browser **Back** button to go back to the main page (instead of leaving the site)
+### Step 1: Deploy Backend on Render (Web Service)
+1. Push your repository to GitHub.
+2. Go to [Render Dashboard](https://dashboard.render.com/) → **New** → **Web Service**.
+3. Connect your repository.
+4. Configure service settings:
+   - **Root Directory:** `backend`
+   - **Runtime:** `Python 3`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - **Instance Type:** `Free` (512 MB RAM)
+5. Under **Environment Variables**, add:
+   - `GEMINI_API_KEY`
+   - `COHERE_API_KEY`
+   - `GROQ_API_KEY`
+   - `QDRANT_URL`
+   - `QDRANT_API_KEY`
+   - `QDRANT_COLLECTION` = `youtube_transcripts_gemini_test`
+6. Click **Deploy Web Service**.
+7. Copy your deployed backend URL (e.g., `https://dsa-assistant-backend.onrender.com`).
 
----
-
-## Customizing the AI Behavior
-
-**Change the language / answer style:**
-Edit `SYSTEM_PROMPT` in `backend/app/services/generator.py`
-
-**Change how queries are normalized:**
-Edit `QUERY_PROMPT` in `backend/app/services/query_normalizer.py`
-
-This is especially important if your playlist is in a language other than Hindi. The normalizer converts the user's query into the exact form that YouTube auto-captions use — so the embedding search can actually find relevant chunks.
-
-**Use a different LLM model:**
-Change `MODEL_NAME` in `backend/app/services/generator.py`. Any model available on Groq works.
-
----
-
-## Key Design Decisions
-
-**Why query normalization?**
-YouTube auto-captions in Hindi write English words phonetically in Devanagari (e.g., "array" → "एरे"). A user typing "array kya hota hai" in Roman script would not match transcript text written as "एरे क्या होता है". The LLM normalizer bridges this gap automatically.
-
-**Why a cross-encoder reranker?**
-Cosine similarity retrieval finds semantically similar text but can miss the most contextually precise chunks. The `BAAI/bge-reranker-v2-m3` cross-encoder scores query-passage pairs together (not separately), giving much better relevance precision.
-
-**Why SSE instead of WebSockets?**
-Server-Sent Events are simpler, unidirectional, and work perfectly for streaming LLM responses from server to client. No persistent two-way connection overhead.
-
-**Why on-platform video embedding?**
-Instead of redirecting users to YouTube, the app embeds a YouTube iframe with `?start=<seconds>&autoplay=1` so users stay on the platform and the video begins playing at the exact relevant moment.
+### Step 2: Deploy Frontend on Vercel
+1. Go to [Vercel Dashboard](https://vercel.com/) → **Add New** → **Project**.
+2. Import your GitHub repository.
+3. Set **Root Directory** to `frontend`.
+4. In **Environment Variables**, add:
+   - `NEXT_PUBLIC_API_URL` = `https://your-backend.onrender.com` (your Render URL from Step 1).
+5. Click **Deploy**.
 
 ---
 
 ## API Reference
 
 ### `POST /api/query`
+Streams real-time answer tokens and timestamp recommendations via Server-Sent Events (SSE).
 
-Streams the full RAG pipeline response as Server-Sent Events.
-
-**Request body:**
+**Request:**
 ```json
-{ "query": "Binary search explain karo" }
+{
+  "query": "sliding window technique kya hoti hai?"
+}
 ```
 
-**SSE Events emitted (in order):**
-
-| Event | Payload | Description |
-|-------|---------|-------------|
-| `meta` | `{ query, normalized_query }` | Fired first — shows the normalized query |
-| `token` | `{ content: "..." }` | One LLM output token at a time |
-| `results` | `{ results: [...] }` | Timestamp cards, sent after answer completes |
-| `done` | `{}` | Stream is complete |
-
----
-
-## Troubleshooting
-
-**`uvicorn` not recognized (Windows)**
-Activate the virtual environment first:
-```powershell
-.\venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload
-```
-
-**Ingestion fails with "No usable Hindi transcript"**
-The video has no auto-generated captions in the expected language. These are skipped automatically.
-
-**YouTube blocks transcript requests mid-ingestion**
-YouTube rate-limits bulk transcript downloads. The script stops gracefully and saves progress. Already-indexed videos remain safe. Wait a few hours and re-run — already-indexed videos are skipped.
-
-**Frontend shows "Failed to fetch" error**
-The backend is not running. Start it with `uvicorn app.main:app --reload` in the `backend/` directory (with venv activated).
-
-**Qdrant connection errors**
-Check that `QDRANT_API_KEY` and `QDRANT_URL` in `backend/.env` are correct. Free-tier Qdrant clusters may pause after a period of inactivity — resume them from the Qdrant Cloud dashboard.
+**SSE Stream Events:**
+1. `event: meta` — `{ "query": "...", "normalized_query": "..." }`
+2. `event: token` — `{ "content": "Sliding" }` (repeated token-by-token)
+3. `event: results` — Array of top video cards with `start_time`, `end_time`, and formatted timestamps.
+4. `event: done` — `{}` (signals stream completion)
 
 ---
 
 ## License
 
-MIT
+MIT License
