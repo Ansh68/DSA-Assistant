@@ -11,7 +11,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://dsa-assistant-pi.vercel.app/"
+        "https://dsa-assistant-pi.vercel.app"
     ],
     allow_credentials=False,
     allow_methods=["*"],
