@@ -521,3 +521,40 @@ body {
   background: var(--border-subtle);
   width: 100%;
 }
+
+/* ─── Server Warmup Loading Banner ──────────────────────────── */
+.warmup-banner {
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+  overflow: hidden;
+  padding: 11px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 0.86rem;
+  color: var(--text-primary);
+  z-index: 40;
+  transition: all 0.3s ease;
+}
+
+.warmup-progress-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background-color: #ffffff;
+  transition: width 1s linear;
+}
+
+.warmup-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--border-medium);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+

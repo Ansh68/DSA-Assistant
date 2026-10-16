@@ -573,11 +573,14 @@ function SourcesSection({
 }
 
 
-/* ─── Main Component ─────────────────────────────────────────── */
+const TOTAL_WARMUP_SECONDS = 55;
 
 export default function QueryInterface() {
   const [inputValue, setInputValue] = useState("");
   const [activeVideo, setActiveVideo] = useState<TimestampResult | null>(null);
+  const [isWarmingUp, setIsWarmingUp] = useState(true);
+  const [warmupSecondsLeft, setWarmupSecondsLeft] = useState(TOTAL_WARMUP_SECONDS);
+  const [showReadyNotice, setShowReadyNotice] = useState(false);
   const [state, setState] = useState<QueryState>({
     status: "idle",
     query: "",
@@ -590,6 +593,65 @@ export default function QueryInterface() {
   const abortRef = useRef<AbortController | null>(null);
   const resultsRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<HTMLDivElement | null>(null);
+
+  // Server warmup check & countdown timer for Render cold starts
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    let isMounted = true;
+
+    const pingServer = async () => {
+      try {
+        const res = await fetch(`${API_URL}/health`, { method: "GET" });
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          if (data.status === "ok") {
+            setIsWarmingUp(false);
+            setShowReadyNotice(true);
+            setTimeout(() => {
+              if (isMounted) setShowReadyNotice(false);
+            }, 3000);
+            return true;
+          }
+        }
+      } catch {
+        // Server is still waking up from Render cold sleep
+      }
+      return false;
+    };
+
+    // Quick initial check
+    pingServer().then((ready) => {
+      if (ready && interval) clearInterval(interval);
+    });
+
+    interval = setInterval(() => {
+      setWarmupSecondsLeft((prev) => {
+        if (prev <= 1) {
+          if (interval) clearInterval(interval);
+          setIsWarmingUp(false);
+          setShowReadyNotice(true);
+          setTimeout(() => {
+            if (isMounted) setShowReadyNotice(false);
+          }, 3000);
+          return 0;
+        }
+
+        // Ping server every 3 seconds while counting down
+        if (prev % 3 === 0) {
+          pingServer().then((ready) => {
+            if (ready && interval) clearInterval(interval);
+          });
+        }
+
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      isMounted = false;
+      if (interval) clearInterval(interval);
+    };
+  }, []);
 
   const handleReset = useCallback(() => {
     abortRef.current?.abort();
@@ -766,6 +828,31 @@ export default function QueryInterface() {
         </div>
       </header>
 
+      {/* ── Server Warmup Banner ─────────────────────────────────── */}
+      {isWarmingUp && (
+        <div className="warmup-banner">
+          <div className="warmup-spinner" />
+          <span>
+            Wait for <strong style={{ color: "#ffffff", fontWeight: 600 }}>{warmupSecondsLeft}s</strong> to heat up the server
+          </span>
+          <div
+            className="warmup-progress-bar"
+            style={{
+              width: `${Math.min(100, Math.max(0, ((TOTAL_WARMUP_SECONDS - warmupSecondsLeft) / TOTAL_WARMUP_SECONDS) * 100))}%`,
+            }}
+          />
+        </div>
+      )}
+
+      {showReadyNotice && !isWarmingUp && (
+        <div className="warmup-banner" style={{ background: "var(--bg-secondary)" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span style={{ color: "#ffffff", fontWeight: 500 }}>Server is ready</span>
+        </div>
+      )}
+
       {/* ── Hero / Search ────────────────────────────────────────── */}
       <section
         style={{
@@ -817,24 +904,24 @@ export default function QueryInterface() {
                 id="query-input"
                 className="search-input"
                 type="text"
-                placeholder="DSA ke baare mein kuch bhi pucho..."
+                placeholder={isWarmingUp ? `Wait for server to heat up (${warmupSecondsLeft}s)...` : "DSA ke baare mein kuch bhi pucho..."}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    handleQuery(inputValue);
+                    if (!isWarmingUp) handleQuery(inputValue);
                   }
                 }}
-                disabled={isBusy}
-                autoFocus
+                disabled={isBusy || isWarmingUp}
+                autoFocus={!isWarmingUp}
                 autoComplete="off"
               />
               <button
                 id="submit-button"
                 type="submit"
                 className="search-button"
-                disabled={isBusy || !inputValue.trim()}
+                disabled={isBusy || isWarmingUp || !inputValue.trim()}
                 aria-label="Search"
               >
                 {isBusy ? (
@@ -865,8 +952,13 @@ export default function QueryInterface() {
                 <button
                   key={q}
                   className="query-chip"
+                  disabled={isBusy || isWarmingUp}
+                  style={{
+                    cursor: isWarmingUp ? "not-allowed" : "pointer",
+                    opacity: isWarmingUp ? 0.45 : 1,
+                  }}
                   onClick={() => {
-                    handleQuery(q);
+                    if (!isWarmingUp) handleQuery(q);
                   }}
                 >
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
